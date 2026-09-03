@@ -1,0 +1,73 @@
+---
+title: "Le principe de responsabilité unique en PHP"
+date: "2026-09-03"
+description: "Ce que le S de SOLID change concrètement dans une classe PHP, avec un avant/après simple."
+category: "PHP"
+tags: ["php", "solid", "architecture"]
+draft: false
+---
+
+Le premier principe de SOLID, **Single Responsibility Principle**, dit qu'une classe ne devrait avoir qu'une seule raison de changer. En pratique, ça se voit vite dans une classe qui mélange logique métier, persistance et notification.
+
+## Avant
+
+```php
+class Commande
+{
+    public function valider(): void
+    {
+        // logique métier
+        if ($this->total <= 0) {
+            throw new InvalidArgumentException('Total invalide');
+        }
+
+        // persistance
+        $pdo = new PDO('mysql:host=localhost;dbname=shop', 'root', '');
+        $pdo->prepare('UPDATE commandes SET statut = ? WHERE id = ?')
+            ->execute(['validee', $this->id]);
+
+        // notification
+        mail($this->emailClient, 'Commande validée', 'Merci pour votre commande !');
+    }
+}
+```
+
+Trois raisons de changer cohabitent dans une seule méthode : une règle de validation, un détail de stockage, un canal de communication.
+
+## Après
+
+```php
+class Commande
+{
+    public function valider(): void
+    {
+        if ($this->total <= 0) {
+            throw new InvalidArgumentException('Total invalide');
+        }
+
+        $this->statut = 'validee';
+    }
+}
+
+class CommandeRepository
+{
+    public function sauvegarder(Commande $commande): void
+    {
+        // persistance isolée ici
+    }
+}
+
+class NotificationCommande
+{
+    public function envoyerConfirmation(Commande $commande): void
+    {
+        // notification isolée ici
+    }
+}
+```
+
+Chaque classe a une seule raison de changer : une règle métier qui évolue, un changement de base de données, un nouveau canal de notification (SMS, push...). C'est ce découpage qui rend le code testable sans mocker la moitié du monde.
+
+## Pourquoi ça compte
+
+Dans un projet Symfony ou Laravel, ce principe se retrouve naturellement dans le découpage services / repositories / listeners. Le comprendre en PHP pur avant de le voir "encadré" par un framework aide à ne pas le confondre avec une simple convention du framework.
