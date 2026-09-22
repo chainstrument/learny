@@ -1,0 +1,846 @@
+---
+title: "API Gateway, DNS et routage : comprendre le chemin d'une requête HTTP"
+date: "2026-09-22"
+description: "Suivre le chemin complet d'une requête HTTP, du DNS jusqu'à Laravel, pour distinguer clairement DNS, firewall/NAT, API Gateway, load balancer et serveur applicatif."
+category: "Admin sys"
+tags: ["dns", "api-gateway", "http", "reseau", "infrastructure"]
+draft: false
+---
+
+Quand on développe une API, on entend rapidement parler de **DNS**, de **reverse proxy**, d'**API Gateway**, de **load balancer**, de **serveur web** et de **serveur applicatif**.
+
+Ces notions sont parfois difficiles à distinguer, car elles interviennent toutes dans le chemin d'une même requête HTTP.
+
+Dans cet article, nous allons suivre concrètement une requête depuis le navigateur d'un client jusqu'à une application Laravel située sur un réseau interne.
+
+Nous utiliserons deux APIs :
+
+- `mes-voitures.com`
+- `mes-maisons.com`
+
+L'objectif est de comprendre notamment :
+
+- ce que fait réellement le DNS ;
+- où arrive une requête en premier ;
+- ce que fait une API Gateway ;
+- comment plusieurs domaines peuvent partager la même IP publique ;
+- comment la Gateway sait vers quel serveur interne envoyer une requête ;
+- quel rôle jouent le domaine, l'URI, `Host` et SNI ;
+- comment tout cela peut s'articuler avec Apache et Laravel.
+
+## 1. Commençons par une architecture simple
+
+Imaginons au départ une seule application Laravel :
+
+```
+                    INTERNET
+                        │
+                        │ HTTPS
+                        ▼
+                 IP publique
+                203.0.113.10
+                        │
+                        ▼
+                     Apache
+                        │
+                        ▼
+                    Laravel
+                        │
+                        ▼
+                    Database
+```
+
+Le client appelle :
+
+```
+https://mes-voitures.com/api/get_products
+```
+
+À ce stade, il n'y a pas forcément d'API Gateway.
+
+Le serveur Apache peut directement recevoir la requête et la transmettre à Laravel.
+
+## 2. Première étape : le DNS
+
+Avant de pouvoir contacter `mes-voitures.com`, le navigateur doit connaître l'adresse IP associée à ce domaine.
+
+Le DNS va donc résoudre :
+
+```
+mes-voitures.com
+        │
+        ▼
+203.0.113.10
+```
+
+Le DNS répond simplement :
+
+> Pour `mes-voitures.com`, l'adresse IP est `203.0.113.10`.
+
+C'est un point important : **le DNS ne transmet pas la requête HTTP à ton serveur**.
+
+Il ne fait pas :
+
+```
+DNS → API Gateway → Laravel
+```
+
+Il fait essentiellement :
+
+```
+Nom de domaine
+      │
+      │ résolution DNS
+      ▼
+Adresse IP
+```
+
+Une fois qu'il connaît l'adresse IP, le navigateur peut contacter directement cette adresse.
+
+## 3. Le navigateur contacte l'IP
+
+Le navigateur sait maintenant que :
+
+```
+mes-voitures.com
+        ↓
+203.0.113.10
+```
+
+Il va donc établir une connexion HTTPS vers :
+
+```
+203.0.113.10:443
+```
+
+La requête quitte le réseau du client et arrive sur ton infrastructure.
+
+Si tu as un firewall ou un routeur en frontal, celui-ci peut effectuer du NAT et transmettre le trafic vers une machine interne.
+
+Par exemple :
+
+```
+Internet
+    │
+    │ HTTPS
+    ▼
+203.0.113.10
+    │
+    │ NAT
+    ▼
+10.0.0.10
+```
+
+L'adresse `203.0.113.10` représente ici l'IP publique.
+
+`10.0.0.10` est une adresse privée de ton réseau interne.
+
+## 4. Ajoutons une API Gateway
+
+Imaginons maintenant que notre infrastructure soit devenue plus importante.
+
+Nous avons plusieurs applications :
+
+```
+                         INTERNET
+                             │
+                             │ HTTPS
+                             ▼
+                      203.0.113.10
+                             │
+                             ▼
+                       API Gateway
+                        10.0.0.10
+                             │
+               ┌─────────────┴─────────────┐
+               │                           │
+               ▼                           ▼
+          10.0.0.20                   10.0.0.30
+        API Voitures                 API Maisons
+           Laravel                     Laravel
+```
+
+La Gateway devient le **point d'entrée public** de nos APIs.
+
+Le principe est alors :
+
+```
+Client
+  │
+  ▼
+IP publique
+  │
+  ▼
+API Gateway
+  │
+  ├──► Serveur voitures
+  │
+  └──► Serveur maisons
+```
+
+Les serveurs Laravel ne sont plus nécessairement directement accessibles depuis Internet.
+
+## 5. Une seule IP publique pour plusieurs domaines
+
+C'est ici que les choses deviennent intéressantes.
+
+Nous pouvons configurer le DNS ainsi :
+
+```
+mes-voitures.com    → 203.0.113.10
+mes-maisons.com     → 203.0.113.10
+```
+
+Les deux domaines ont donc **la même IP publique**.
+
+Cela ne signifie pas qu'ils utilisent la même application.
+
+La Gateway va pouvoir différencier les requêtes.
+
+On obtient :
+
+```
+                    203.0.113.10
+                           │
+                           ▼
+                     API Gateway
+                           │
+                 ┌─────────┴─────────┐
+                 │                   │
+                 ▼                   ▼
+          mes-voitures.com     mes-maisons.com
+                 │                   │
+                 ▼                   ▼
+             10.0.0.20           10.0.0.30
+```
+
+C'est une architecture parfaitement possible.
+
+## 6. Comment la Gateway sait-elle où envoyer la requête ?
+
+Prenons cette URL :
+
+```
+https://mes-voitures.com/api/get_products
+```
+
+Une fois la connexion HTTP établie, la requête contient notamment :
+
+```
+GET /api/get_products HTTP/1.1
+Host: mes-voitures.com
+```
+
+Nous avons donc deux informations importantes.
+
+Le domaine :
+
+```
+Host: mes-voitures.com
+```
+
+et le chemin :
+
+```
+/api/get_products
+```
+
+La Gateway peut utiliser ces informations pour effectuer son routage.
+
+Par exemple :
+
+```
+Host: mes-voitures.com
+        │
+        ▼
+10.0.0.20
+```
+
+Alors que :
+
+```
+Host: mes-maisons.com
+        │
+        ▼
+10.0.0.30
+```
+
+## 7. Le rôle de l'URI
+
+L'URI peut également intervenir dans le routage.
+
+Par exemple, nous pourrions avoir :
+
+```
+mes-voitures.com/api/products
+        ↓
+10.0.0.20
+
+mes-voitures.com/api/customers
+        ↓
+10.0.0.21
+
+mes-voitures.com/api/orders
+        ↓
+10.0.0.22
+```
+
+La Gateway peut donc prendre en compte :
+
+```
+Domaine + URI
+```
+
+pour déterminer la destination.
+
+Par exemple :
+
+```
+Host: mes-voitures.com
+URI:  /api/products
+        │
+        ▼
+Serveur produits
+```
+
+ou :
+
+```
+Host: mes-voitures.com
+URI:  /api/orders
+        │
+        ▼
+Serveur commandes
+```
+
+Cependant, le domaine et l'URI n'ont pas exactement le même rôle.
+
+Le domaine permet notamment d'identifier **quelle application ou quel service est concerné**.
+
+L'URI permet ensuite d'identifier **quelle ressource ou quelle route est demandée**.
+
+## 8. Et HTTPS dans tout ça ?
+
+Avec HTTPS, une subtilité apparaît.
+
+Avant même que la Gateway puisse lire le contenu HTTP, le client doit établir une connexion TLS.
+
+Lors de cette étape, le client indique généralement le nom du domaine demandé via **SNI (Server Name Indication)**.
+
+Schématiquement :
+
+```
+Client
+   │
+   │ TLS ClientHello
+   │
+   │ SNI = mes-voitures.com
+   ▼
+API Gateway
+```
+
+La Gateway peut alors savoir que le client souhaite accéder à :
+
+```
+mes-voitures.com
+```
+
+et présenter le certificat TLS correspondant.
+
+Une fois la connexion HTTPS établie, la requête HTTP contient notamment :
+
+```
+GET /api/get_products HTTP/1.1
+Host: mes-voitures.com
+```
+
+La Gateway peut alors appliquer ses règles de routage.
+
+## 9. Exemple complet : mes-voitures.com
+
+Suivons maintenant la requête du début à la fin.
+
+Le client demande :
+
+```
+https://mes-voitures.com/api/get_products
+```
+
+### Étape 1 : résolution DNS
+
+Le navigateur demande au DNS :
+
+```
+Quelle est l'IP de mes-voitures.com ?
+```
+
+Le DNS répond :
+
+```
+203.0.113.10
+```
+
+### Étape 2 : connexion HTTPS
+
+Le navigateur contacte :
+
+```
+203.0.113.10:443
+```
+
+Le trafic arrive sur l'infrastructure publique.
+
+### Étape 3 : firewall / NAT
+
+Le firewall peut rediriger le trafic vers :
+
+```
+10.0.0.10:443
+```
+
+qui correspond à notre API Gateway.
+
+### Étape 4 : API Gateway
+
+La Gateway reçoit la connexion.
+
+Elle peut voir notamment :
+
+```
+SNI = mes-voitures.com
+```
+
+puis la requête HTTP :
+
+```
+GET /api/get_products HTTP/1.1
+Host: mes-voitures.com
+```
+
+Elle consulte alors sa configuration.
+
+Par exemple :
+
+```
+mes-voitures.com → 10.0.0.20
+mes-maisons.com  → 10.0.0.30
+```
+
+Elle transmet donc la requête vers :
+
+```
+10.0.0.20
+```
+
+## 10. Que se passe-t-il sur le serveur Laravel ?
+
+Imaginons que `10.0.0.20` soit notre serveur applicatif.
+
+Il peut avoir cette architecture :
+
+```
+10.0.0.20
+    │
+    ▼
+  Apache
+    │
+    ▼
+ Laravel
+    │
+    ▼
+ Database
+```
+
+Apache reçoit :
+
+```
+GET /api/get_products
+```
+
+et Laravel traite cette route.
+
+Par exemple :
+
+```php
+Route::get('/products', [ProductController::class, 'index']);
+```
+
+Laravel interroge la base de données et construit la réponse JSON :
+
+```json
+{
+    "products": [
+        {
+            "id": 1,
+            "name": "Peugeot 208"
+        },
+        {
+            "id": 2,
+            "name": "Renault Clio"
+        }
+    ]
+}
+```
+
+La réponse repart ensuite dans l'autre sens :
+
+```
+Laravel
+   │
+   ▼
+Apache
+   │
+   ▼
+10.0.0.20
+   │
+   ▼
+API Gateway
+   │
+   ▼
+203.0.113.10
+   │
+   ▼
+Client
+```
+
+## 11. Et mes-maisons.com ?
+
+Exactement le même mécanisme.
+
+Le DNS peut contenir :
+
+```
+mes-voitures.com    → 203.0.113.10
+mes-maisons.com     → 203.0.113.10
+```
+
+Le client appelle :
+
+```
+https://mes-maisons.com/api/get_products
+```
+
+La requête arrive donc sur la même Gateway.
+
+Mais elle contient :
+
+```
+Host: mes-maisons.com
+```
+
+La Gateway applique une autre règle :
+
+```
+mes-maisons.com → 10.0.0.30
+```
+
+Le chemin devient donc :
+
+```
+Client
+  │
+  │ mes-maisons.com
+  ▼
+DNS
+  │
+  │ 203.0.113.10
+  ▼
+API Gateway
+  │
+  │ Host: mes-maisons.com
+  ▼
+10.0.0.30
+  │
+  ▼
+Laravel
+```
+
+## 12. Le DNS et la Gateway n'ont donc pas le même rôle
+
+Il est important de bien séparer les deux.
+
+### DNS
+
+Le DNS répond à :
+
+> « Quelle adresse IP correspond à ce nom ? »
+
+Exemple :
+
+```
+mes-voitures.com → 203.0.113.10
+```
+
+### API Gateway
+
+La Gateway répond plutôt à :
+
+> « Cette requête reçue sur mon IP publique doit être envoyée vers quel service interne ? »
+
+Exemple :
+
+```
+Host: mes-voitures.com
+        ↓
+10.0.0.20
+```
+
+ou :
+
+```
+Host: mes-maisons.com
+        ↓
+10.0.0.30
+```
+
+On peut donc résumer :
+
+```
+                    DNS
+                     │
+                     │ nom → IP publique
+                     ▼
+              203.0.113.10
+                     │
+                     ▼
+                API Gateway
+                     │
+             ┌───────┴───────┐
+             │               │
+             ▼               ▼
+         10.0.0.20       10.0.0.30
+         Voitures          Maisons
+```
+
+## 13. Une architecture plus complète
+
+Dans une infrastructure réelle, nous pouvons avoir plusieurs niveaux :
+
+```
+                              INTERNET
+                                  │
+                                  ▼
+                              DNS public
+                                  │
+                    ┌─────────────┴─────────────┐
+                    │                           │
+            mes-voitures.com             mes-maisons.com
+                    │                           │
+                    └─────────────┬─────────────┘
+                                  │
+                                  ▼
+                         IP publique
+                         203.0.113.10
+                                  │
+                                  ▼
+                             Firewall
+                                  │
+                                  ▼
+                          API Gateway
+                           10.0.0.10
+                                  │
+                    ┌─────────────┼─────────────┐
+                    │             │             │
+                    ▼             ▼             ▼
+                10.0.0.20     10.0.0.30     10.0.0.40
+                Voitures       Maisons        Clients
+                    │             │             │
+                    ▼             ▼             ▼
+                 Apache        Apache        Apache
+                    │             │             │
+                    ▼             ▼             ▼
+                 Laravel       Laravel        Laravel
+```
+
+Et les serveurs internes peuvent eux-mêmes être répartis sur plusieurs machines.
+
+Par exemple, pour l'API voitures :
+
+```
+                     API Gateway
+                          │
+                          ▼
+                    Load Balancer
+                          │
+                 ┌────────┴────────┐
+                 ▼                 ▼
+            Laravel #1         Laravel #2
+            10.0.0.20          10.0.0.21
+                 │                 │
+                 └────────┬────────┘
+                          ▼
+                       Database
+```
+
+Le client ne connaît toujours que :
+
+```
+https://mes-voitures.com
+```
+
+Il n'a pas besoin de connaître :
+
+```
+10.0.0.20
+10.0.0.21
+```
+
+## 14. Pourquoi mettre une Gateway ?
+
+Une Gateway devient particulièrement intéressante lorsqu'on commence à avoir plusieurs services.
+
+Elle peut centraliser différentes responsabilités :
+
+- authentification ;
+- autorisation ;
+- rate limiting ;
+- logs ;
+- monitoring ;
+- routage ;
+- gestion des certificats TLS ;
+- CORS ;
+- cache ;
+- load balancing selon les solutions utilisées ;
+- filtrage des requêtes.
+
+Par exemple :
+
+```
+                       API Gateway
+                            │
+        ┌───────────────────┼───────────────────┐
+        │                   │                   │
+        ▼                   ▼                   ▼
+   Authentification      Rate limit          Routing
+        │                   │                   │
+        └───────────────────┼───────────────────┘
+                            │
+                            ▼
+                       API Laravel
+```
+
+L'application Laravel peut alors se concentrer davantage sur son métier.
+
+## 15. API Gateway et Apache ne sont pas forcément la même chose
+
+On peut également avoir :
+
+```
+Internet
+   │
+   ▼
+API Gateway
+   │
+   ▼
+Apache
+   │
+   ▼
+Laravel
+```
+
+Dans cette architecture, les responsabilités sont séparées.
+
+La Gateway est le point d'entrée de plusieurs APIs.
+
+Apache est le serveur web/reverse proxy devant Laravel.
+
+Mais dans une petite application, ajouter une Gateway dédiée peut être inutile.
+
+On peut simplement avoir :
+
+```
+Internet
+   │
+   ▼
+Apache
+   │
+   ▼
+Laravel
+```
+
+La Gateway devient surtout intéressante lorsque l'architecture comporte plusieurs services, APIs ou applications.
+
+## 16. À retenir
+
+Le chemin d'une requête peut donc être résumé ainsi :
+
+```
+1. Client
+      │
+      ▼
+2. DNS
+      │
+      │ mes-voitures.com → 203.0.113.10
+      ▼
+3. IP publique
+      │
+      ▼
+4. Firewall / NAT
+      │
+      ▼
+5. API Gateway
+      │
+      │ Host / URI / règles de routage
+      ▼
+6. Serveur interne
+      │
+      ▼
+7. Apache / Nginx
+      │
+      ▼
+8. Laravel
+      │
+      ▼
+9. Base de données
+```
+
+Et les rôles fondamentaux sont :
+
+```
+DNS
+│
+└── Nom de domaine → IP
+
+Firewall / NAT
+│
+└── Fait entrer le trafic vers le réseau interne
+
+API Gateway
+│
+└── Point d'entrée applicatif et routage vers les services
+
+Apache / Nginx
+│
+└── Serveur web / reverse proxy
+
+Laravel
+│
+└── Logique métier et API
+
+Database
+│
+└── Données
+```
+
+Enfin, une idée essentielle à retenir est qu'une **API Gateway n'est pas une adresse IP magique ni un élément obligatoire d'une API**.
+
+C'est un composant logiciel ou un service qui sert de **point d'entrée et de contrôle devant plusieurs services**.
+
+Dans notre exemple, une seule IP publique :
+
+```
+203.0.113.10
+```
+
+peut parfaitement servir :
+
+```
+mes-voitures.com
+mes-maisons.com
+mes-motos.com
+mes-bateaux.com
+```
+
+Le DNS fait simplement pointer ces domaines vers cette IP. Ensuite, la Gateway reçoit les requêtes et utilise notamment les informations de la connexion TLS et de la requête HTTP — comme SNI, `Host` et l'URI — pour déterminer vers quel service interne les transmettre.
+
+Si tu veux poursuivre ce tuto, l'étape logique suivante serait de faire **un TP concret** avec 2 ou 3 machines/VM : une Gateway Nginx, deux applications Laravel/Apache, un DNS local, puis de configurer réellement les règles `mes-voitures.com → serveur 1` et `mes-maisons.com → serveur 2`.
