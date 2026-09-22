@@ -28,7 +28,7 @@ L'objectif est de comprendre notamment :
 - quel rôle jouent le domaine, l'URI, `Host` et SNI ;
 - comment tout cela peut s'articuler avec Apache et Laravel.
 
-## 1. Commençons par une architecture simple
+## Une architecture toute simple pour commencer
 
 Imaginons au départ une seule application Laravel :
 
@@ -60,7 +60,7 @@ https://mes-voitures.com/api/get_products
 
 Le serveur Apache peut directement recevoir la requête et la transmettre à Laravel.
 
-## 2. Première étape : le DNS
+## Le DNS entre en jeu
 
 Avant de pouvoir contacter `mes-voitures.com`, le navigateur doit connaître l'adresse IP associée à ce domaine.
 
@@ -97,7 +97,7 @@ Adresse IP
 
 Une fois qu'il connaît l'adresse IP, le navigateur peut contacter directement cette adresse.
 
-## 3. Le navigateur contacte l'IP
+## Le navigateur va chercher l'IP
 
 Le navigateur sait maintenant que :
 
@@ -135,7 +135,7 @@ L'adresse `203.0.113.10` représente ici l'IP publique.
 
 `10.0.0.10` est une adresse privée de ton réseau interne.
 
-## 4. Ajoutons une API Gateway
+## Une API Gateway entre en scène
 
 Imaginons maintenant que notre infrastructure soit devenue plus importante.
 
@@ -180,7 +180,7 @@ API Gateway
 
 Les serveurs Laravel ne sont plus nécessairement directement accessibles depuis Internet.
 
-## 5. Une seule IP publique pour plusieurs domaines
+## Une seule IP publique pour plusieurs domaines
 
 C'est ici que les choses deviennent intéressantes.
 
@@ -216,7 +216,7 @@ On obtient :
 
 C'est une architecture parfaitement possible.
 
-## 6. Comment la Gateway sait-elle où envoyer la requête ?
+## Comment la Gateway sait où envoyer la requête
 
 Prenons cette URL :
 
@@ -265,7 +265,7 @@ Host: mes-maisons.com
 10.0.0.30
 ```
 
-## 7. Le rôle de l'URI
+## Le rôle de l'URI dans le routage
 
 L'URI peut également intervenir dans le routage.
 
@@ -319,7 +319,7 @@ Le domaine permet notamment d'identifier **quelle application ou quel service es
 
 L'URI permet ensuite d'identifier **quelle ressource ou quelle route est demandée**.
 
-## 8. Et HTTPS dans tout ça ?
+## Et avec HTTPS, comment ça se passe ?
 
 Avec HTTPS, une subtilité apparaît.
 
@@ -356,7 +356,7 @@ Host: mes-voitures.com
 
 La Gateway peut alors appliquer ses règles de routage.
 
-## 9. Exemple complet : mes-voitures.com
+## Suivons une requête de bout en bout : mes-voitures.com
 
 Suivons maintenant la requête du début à la fin.
 
@@ -366,7 +366,7 @@ Le client demande :
 https://mes-voitures.com/api/get_products
 ```
 
-### Étape 1 : résolution DNS
+### Résolution DNS
 
 Le navigateur demande au DNS :
 
@@ -380,7 +380,7 @@ Le DNS répond :
 203.0.113.10
 ```
 
-### Étape 2 : connexion HTTPS
+### Connexion HTTPS
 
 Le navigateur contacte :
 
@@ -390,7 +390,7 @@ Le navigateur contacte :
 
 Le trafic arrive sur l'infrastructure publique.
 
-### Étape 3 : firewall / NAT
+### Firewall et NAT
 
 Le firewall peut rediriger le trafic vers :
 
@@ -400,7 +400,7 @@ Le firewall peut rediriger le trafic vers :
 
 qui correspond à notre API Gateway.
 
-### Étape 4 : API Gateway
+### Passage par l'API Gateway
 
 La Gateway reçoit la connexion.
 
@@ -432,7 +432,7 @@ Elle transmet donc la requête vers :
 10.0.0.20
 ```
 
-## 10. Que se passe-t-il sur le serveur Laravel ?
+## Ce qui se passe côté serveur Laravel
 
 Imaginons que `10.0.0.20` soit notre serveur applicatif.
 
@@ -503,7 +503,7 @@ API Gateway
 Client
 ```
 
-## 11. Et mes-maisons.com ?
+## Et pour mes-maisons.com ?
 
 Exactement le même mécanisme.
 
@@ -555,7 +555,7 @@ API Gateway
 Laravel
 ```
 
-## 12. Le DNS et la Gateway n'ont donc pas le même rôle
+## DNS et Gateway : deux rôles bien distincts
 
 Il est important de bien séparer les deux.
 
@@ -612,7 +612,7 @@ On peut donc résumer :
          Voitures          Maisons
 ```
 
-## 13. Une architecture plus complète
+## Une architecture plus complète, dans la vraie vie
 
 Dans une infrastructure réelle, nous pouvons avoir plusieurs niveaux :
 
@@ -685,7 +685,7 @@ Il n'a pas besoin de connaître :
 10.0.0.21
 ```
 
-## 14. Pourquoi mettre une Gateway ?
+## Pourquoi ajouter une Gateway ?
 
 Une Gateway devient particulièrement intéressante lorsqu'on commence à avoir plusieurs services.
 
@@ -721,7 +721,7 @@ Par exemple :
 
 L'application Laravel peut alors se concentrer davantage sur son métier.
 
-## 15. API Gateway et Apache ne sont pas forcément la même chose
+## API Gateway et Apache, ce n'est pas la même chose
 
 On peut également avoir :
 
@@ -760,7 +760,7 @@ Laravel
 
 La Gateway devient surtout intéressante lorsque l'architecture comporte plusieurs services, APIs ou applications.
 
-## 16. À retenir
+## Ce qu'il faut retenir
 
 Le chemin d'une requête peut donc être résumé ainsi :
 
@@ -842,5 +842,3 @@ mes-bateaux.com
 ```
 
 Le DNS fait simplement pointer ces domaines vers cette IP. Ensuite, la Gateway reçoit les requêtes et utilise notamment les informations de la connexion TLS et de la requête HTTP — comme SNI, `Host` et l'URI — pour déterminer vers quel service interne les transmettre.
-
-Si tu veux poursuivre ce tuto, l'étape logique suivante serait de faire **un TP concret** avec 2 ou 3 machines/VM : une Gateway Nginx, deux applications Laravel/Apache, un DNS local, puis de configurer réellement les règles `mes-voitures.com → serveur 1` et `mes-maisons.com → serveur 2`.
